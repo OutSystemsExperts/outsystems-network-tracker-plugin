@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin xmlns="http://cordova.apache.org/ns/plugins/1.0" id="outsystems-network-tracker-plugin" version="0.0.1">
+    <name>OutSystems Network Tracker</name>
+    <keywords>outsystems, cordova, networking, http, https</keywords>
+    <platform name="ios">
+        <config-file target="config.xml" parent="/*">
+            <feature name="OSNetworkTrackerPlugin">
+                <param name="ios-package" value="OSNetworkTrackerPlugin" />
+                <param name="onload" value="true" />
+            </feature>
+        </config-file>
+
+        <framework src="libsqlite3.dylib" />
+        
+        <!-- https://github.com/rabovik/RSSwizzle.git -->
+        <header-file src="RSSwizzle/RSSwizzle/RSSwizzle.h" />
+        <source-file src="RSSwizzle/RSSwizzle/RSSwizzle.m" />
+
+        <header-file src="src/ios/OSNetworkTrackerPlugin.h" />
+        <source-file src="src/ios/OSNetworkTrackerPlugin.m" />
+
+        <header-file src="src/ios/OSNetworkObserver.h" />
+        <source-file src="src/ios/OSNetworkObserver.m" />
+
+        <header-file src="src/ios/OSNetworkRecorder.h" />
+        <source-file src="src/ios/OSNetworkRecorder.m" />
+        
+        <header-file src="src/ios/OSNetworkTransaction.h" />
+        <source-file src="src/ios/OSNetworkTransaction.m" />
+
+        <header-file src="src/ios/OSNetworkTransactionDatabaseWriter.h" />
+        <source-file src="src/ios/OSNetworkTransactionDatabaseWriter.m" />
+
+        
+        <source-file src="src/ios/Frameworks/FMDB/FMDB-IOS-Universal.a" framework="true" />
+        <header-file src="src/ios/Frameworks/FMDB/include/FMDB/FMDatabase.h" />
+        <header-file src="src/ios/Frameworks/FMDB/include/FMDB/FMDatabaseAdditions.h" />
+        <header-file src="src/ios/Frameworks/FMDB/include/FMDB/FMDatabasePool.h" />
+        <header-file src="src/ios/Frameworks/FMDB/include/FMDB/FMDatabaseQueue.h" />
+        <header-file src="src/ios/Frameworks/FMDB/include/FMDB/FMDB.h" />
+        <header-file src="src/ios/Frameworks/FMDB/include/FMDB/FMResultSet.h" />
+    </platform>
+</plugin>
