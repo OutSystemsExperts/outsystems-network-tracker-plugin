@@ -265,6 +265,22 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
                     continue;
                 }
                 
+                // iOS 10 adds support on UIWebView to intercep XHR requests but they end up on a different delegate
+                // WebCoreResourceHandleAsOperationQueueDelegate
+                // WebCoreResourceHandleAsDelegate
+                // WebResourceLoaderQuickLookDelegate
+                if(class == NSClassFromString(@"WebCoreResourceHandleAsDelegate")) {
+                    unsigned int methodCount = 0;
+                    Method *methods = class_copyMethodList(class, &methodCount);
+                    for (unsigned int methodIndex = 0; methodIndex < methodCount; methodIndex++) {
+                        SEL sel = method_getName(methods[methodIndex]);
+                        SEL sel2 = @selector(connection:didReceiveData:lengthReceived:);
+                        if(sel == sel2) {
+                            [self injectIntoWebCoreDidReceiveData:class];
+                        }
+                    }
+                }
+                
                 // Use the runtime API rather than the methods on NSObject to avoid sending messages to
                 // classes we're not interested in swizzling. Otherwise we hit +initialize on all classes.
                 // NOTE: calling class_getInstanceMethod() DOES send +initialize to the class. That's why we iterate through the method list.
@@ -274,7 +290,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
                 for (unsigned int methodIndex = 0; methodIndex < methodCount; methodIndex++) {
                     for (int selectorIndex = 0; selectorIndex < numSelectors; ++selectorIndex) {
                         if (method_getName(methods[methodIndex]) == selectors[selectorIndex]) {
-                            NSLog(@"Found %@, %@", [class description], NSStringFromSelector(selectors[selectorIndex]));
                             [self injectIntoDelegateClass:class];
                             matchingSelectorFound = YES;
                             break;
@@ -299,6 +314,67 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
         [self injectIntoNSURLSessionAsyncDataAndDownloadTaskMethods];
         [self injectIntoNSURLSessionAsyncUploadTaskMethods];
     });
+}
+
++ (void)injectIntoWebCoreDidReceiveData: (Class)cls {
+    
+    // From https://github.com/WebKit/webkit/blob/master/Source/WebCore/platform/network/mac/WebCoreResourceHandleAsDelegate.mm
+    // - (void)connection:(NSURLConnection *)connection didReceiveData:(NSData *)data lengthReceived:(long long)lengthReceived
+    
+    SEL selector = @selector(connection:didReceiveData:lengthReceived:);
+    
+    if([cls instancesRespondToSelector:selector]) {
+        [RSSwizzle
+         swizzleInstanceMethod:selector
+         inClass:cls
+         newImpFactory:^id(RSSwizzleInfo *swizzleInfo) {
+             // This block will be used as the new implementation.
+             return ^void (__unsafe_unretained id self, NSURLConnection *connection, NSData *data, long long lengthReceived){
+                 // Call observer method
+                 [[OSNetworkObserver sharedObserver] connection:connection didReceiveData:data delegate:self];
+                 
+                 // You MUST always cast implementation to the correct function pointer.
+                 void* (*originalIMP)(__unsafe_unretained id, SEL, NSURLConnection *connection, NSData *data, long long lengthReceived);
+                 originalIMP = (__typeof(originalIMP))[swizzleInfo getOriginalImplementation];
+                 // Calling original implementation.
+                 originalIMP(self,selector, connection, data, lengthReceived);
+                 
+                
+             };
+         }
+         mode:RSSwizzleModeAlways
+         key:nil];
+    }
+    
+    /// - (void)connection:(NSURLConnection *)connection didReceiveDataArray:(NSArray *)dataArray
+    SEL selector2 = @selector(connection:didReceiveDataArray:);
+    
+    if([cls instancesRespondToSelector:selector2]) {
+        [RSSwizzle
+         swizzleInstanceMethod:selector2
+         inClass:cls
+         newImpFactory:^id(RSSwizzleInfo *swizzleInfo) {
+             // This block will be used as the new implementation.
+             return ^void (__unsafe_unretained id self, NSURLConnection *connection, NSArray* dataArray){
+                 
+                 NSMutableData* mutableData = [[NSMutableData alloc] init];
+                 if([dataArray count] > 0) {
+                     [mutableData appendData:[dataArray objectAtIndex:0]];
+                 }
+                 // Call observer method
+                 [[OSNetworkObserver sharedObserver] connection:connection didReceiveData:[mutableData copy] delegate:self];
+                 
+                 // You MUST always cast implementation to the correct function pointer.
+                 void* (*originalIMP)(__unsafe_unretained id, SEL, NSURLConnection *connection, NSArray* dataArray);
+                 originalIMP = (__typeof(originalIMP))[swizzleInfo getOriginalImplementation];
+                 // Calling original implementation.
+                 originalIMP(self,selector2, connection, dataArray);
+             };
+         }
+         mode:RSSwizzleModeAlways
+         key:nil];
+    }
+    
 }
 
 + (void)injectIntoDelegateClass:(Class)cls
@@ -334,14 +410,13 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     SEL selector = @selector(connection:willSendRequest:redirectResponse:);
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
          newImpFactory:^id(RSSwizzleInfo *swizzleInfo) {
              // This block will be used as the new implementation.
              return ^NSURLRequest*(__unsafe_unretained id self, NSURLConnection *connection, NSURLRequest *request, NSURLResponse *response){
-                 NSLog(@"Called connection:willSendRequest:redirectResponse: on %@", NSStringFromClass([self class]));
+                 
                  // Call observer method
                  [[OSNetworkObserver sharedObserver] connection:connection willSendRequest:request redirectResponse:response delegate:self];
                  
@@ -365,30 +440,54 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     
     SEL selector = @selector(connection:didReceiveData:);
     
-    if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
-        [RSSwizzle
-         swizzleInstanceMethod:selector
-         inClass:cls
-         newImpFactory:^id(RSSwizzleInfo *swizzleInfo) {
-             // This block will be used as the new implementation.
-             return ^void(__unsafe_unretained id self, NSURLConnection *connection, NSData *data){
-                 
-                 // Call observer method
-                 [[OSNetworkObserver sharedObserver] connection:connection didReceiveData:data delegate:self];
-                 
-                 // You MUST always cast implementation to the correct function pointer.
-                 void (*originalIMP)(__unsafe_unretained id, SEL, NSURLConnection *connection, NSData *data);
-                 originalIMP = (__typeof(originalIMP))[swizzleInfo getOriginalImplementation];
-                 
-                 // Calling original implementation.
-                 originalIMP(self,selector, connection, data);
-                 
-                 
-             };
-         }
-         mode:RSSwizzleModeAlways
-         key:nil];
+    Protocol *protocol = @protocol(NSURLConnectionDataDelegate);
+    if(!protocol) {
+        protocol = @protocol(NSURLConnectionDelegate);
+    }
+    
+    
+    
+    Method oldmethod = class_getInstanceMethod(cls, selector);
+    
+    if(!oldmethod) {
+        
+        struct objc_method_description methodDescription = protocol_getMethodDescription(protocol, selector, NO, YES);
+        
+        typedef void (^NSURLConnectionDidReceiveDataBlock)(id <NSURLConnectionDelegate> slf, NSURLConnection *connection, NSData *data);
+        NSURLConnectionDidReceiveDataBlock undefinedBlock = ^(id <NSURLConnectionDelegate> slf, NSURLConnection *connection, NSData *data) {
+            [[OSNetworkObserver sharedObserver] connection:connection didReceiveData:data delegate:slf];
+        };
+        
+        IMP implementation = imp_implementationWithBlock((id) undefinedBlock);
+        class_addMethod(cls, selector, implementation, methodDescription.types);
+    } else {
+        
+        
+        
+        if([cls instancesRespondToSelector:selector]) {
+            [RSSwizzle
+             swizzleInstanceMethod:selector
+             inClass:cls
+             newImpFactory:^id(RSSwizzleInfo *swizzleInfo) {
+                 // This block will be used as the new implementation.
+                 return ^void(__unsafe_unretained id self, NSURLConnection *connection, NSData *data){
+                     
+                     // Call observer method
+                     [[OSNetworkObserver sharedObserver] connection:connection didReceiveData:data delegate:self];
+                     
+                     // You MUST always cast implementation to the correct function pointer.
+                     void (*originalIMP)(__unsafe_unretained id, SEL, NSURLConnection *connection, NSData *data);
+                     originalIMP = (__typeof(originalIMP))[swizzleInfo getOriginalImplementation];
+                     
+                     // Calling original implementation.
+                     originalIMP(self,selector, connection, data);
+                     
+                     
+                 };
+             }
+             mode:RSSwizzleModeAlways
+             key:nil];
+        }
     }
     
 }
@@ -399,7 +498,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     // - (void)connection:(NSURLConnection *)connection didReceiveResponse:(NSURLResponse *)response;
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
@@ -431,7 +529,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     SEL selector = @selector(connectionDidFinishLoading:);
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
@@ -466,7 +563,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     SEL selector = @selector(connection:didFailWithError:);
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
@@ -505,7 +601,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     SEL selector = @selector(URLSession:task:willPerformHTTPRedirection:newRequest:completionHandler:);
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
@@ -541,7 +636,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     SEL selector = @selector(URLSession:dataTask:didReceiveData:);
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
@@ -575,7 +669,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     SEL selector = @selector(URLSession:dataTask:didReceiveResponse:completionHandler:);
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
@@ -609,7 +702,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     SEL selector = @selector(URLSession:task:didCompleteWithError:);
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
@@ -641,7 +733,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     SEL selector = @selector(respondsToSelector:);
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
@@ -675,7 +766,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     SEL selector = @selector(URLSession:dataTask:didBecomeDownloadTask:);
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
@@ -705,7 +795,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     SEL selector = @selector(URLSession:downloadTask:didWriteData:totalBytesWritten:totalBytesExpectedToWrite:);
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
@@ -735,7 +824,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
     SEL selector = @selector(URLSession:downloadTask:didFinishDownloadingToURL:);
     
     if([cls instancesRespondToSelector:selector]) {
-        NSLog(@"Injecting into %@, %@", [cls description], NSStringFromSelector(selector));
         [RSSwizzle
          swizzleInstanceMethod:selector
          inClass:cls
@@ -868,10 +956,6 @@ didBecomeDownloadTask:(NSURLSessionDownloadTask *)downloadTask delegate:(id <NSU
             if ([OSNetworkObserver isEnabled]) {
                 NSString *requestID = [OSNetworkObserver nextRequestID];
                 [[OSNetworkRecorder sharedInstance] recordRequestWillBeSentWithRequestID:requestID request:request redirectResponse:nil];
-                
-                
-                NSString *requestMechanism = [NSString stringWithFormat:@"NSURLConnection (delegate: %@) sendSynchronousRequest:returningResponse:error:", class];
-                NSLog(@"\n%@\n%@\n\n", requestMechanism, requestID);
                 
                 NSError *temporaryError = nil;
                 NSURLResponse *temporaryResponse = nil;
