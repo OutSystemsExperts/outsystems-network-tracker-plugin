@@ -31,6 +31,9 @@
         <header-file src="src/ios/OSNetworkTransactionDatabaseWriter.h" />
         <source-file src="src/ios/OSNetworkTransactionDatabaseWriter.m" />
 
+        <header-file src="src/ios/OSNetworkHARExporter.h" />
+        <source-file src="src/ios/OSNetworkHARExporter.m" />
+
         
         <source-file src="src/ios/Frameworks/FMDB/FMDB-IOS-Universal.a" framework="true" />
         <header-file src="src/ios/Frameworks/FMDB/include/FMDB/FMDatabase.h" />

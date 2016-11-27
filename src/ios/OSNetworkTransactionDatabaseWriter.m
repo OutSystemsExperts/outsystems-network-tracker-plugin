@@ -8,17 +8,6 @@
 
 #import "OSNetworkTransactionDatabaseWriter.h"
 #include "sqlite3.h"
-#import "FMDB.h"
-
-@interface OSNetworkTransactionDatabaseWriter()
-
-/*
- *   Identifies a running session.
- *   A running session is the time of execution since the application goes into foreground and ends when entering on background.
- */
-@property time_t sessionId;
-
-@end
 
 @implementation OSNetworkTransactionDatabaseWriter
 
@@ -29,16 +18,6 @@
         [self createTable];
     }
     return self;
-}
-
--(void) newSession{
-    self.sessionId = [[NSDate date] timeIntervalSince1970];
-}
-
-- (NSString*) filename {
-    NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-    NSString *filePath = [documentsPath stringByAppendingPathComponent:@"os_network_trace.db"];
-    return filePath;
 }
 
 - (void) createTable {
@@ -72,7 +51,7 @@
     ); \
     ";
     
-    FMDatabaseQueue *dbQueue = [FMDatabaseQueue databaseQueueWithPath: [self filename]];
+    FMDatabaseQueue *dbQueue = [FMDatabaseQueue databaseQueueWithPath: [[OSNetworkRecorder sharedInstance] filename]];
     [dbQueue inDatabase:^(FMDatabase *db) {
         [db executeUpdate:createSqlStmnt];
         
@@ -80,13 +59,14 @@
     [dbQueue close];
 }
 
-- (void) writeNetworkTransaction: (OSNetworkTransaction* ) transaction responseBody:(NSData*) responseBody {
+- (void) writeNetworkTransaction: (OSNetworkTransaction* ) transaction responseBody:(NSData*) responseBody sessionId:(NSNumber*) sessionId {
     
     
-//    NSString* queryInsert = [NSString stringWithFormat:@"INSERT INTO traces VALUES (%@, %ld, %lf, %lf, %lf, %@, %@, %@, %@, %@, %@, %@, %ld, %ld, %ld, %@, %@, %@, %@, %ld, %ld, %@ )",
-//                             ];
+    //    NSString* queryInsert = [NSString stringWithFormat:@"INSERT INTO traces VALUES (%@, %ld, %lf, %lf, %lf, %@, %@, %@, %@, %@, %@, %@, %ld, %ld, %ld, %@, %@, %@, %@, %ld, %ld, %@ )",
+    //                             ];
     
-    FMDatabaseQueue *dbQueue = [FMDatabaseQueue databaseQueueWithPath: [self filename]];
+    FMDatabaseQueue *dbQueue = [FMDatabaseQueue databaseQueueWithPath: [[OSNetworkRecorder sharedInstance] filename]];
+    
     [dbQueue inDatabase:^(FMDatabase *db) {
         
         NSString* insertStmt = @" \
@@ -116,10 +96,9 @@
         responseContent \
         ) \
         VALUES ( ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? );";
-        
         BOOL inserted = [db executeUpdate:insertStmt,
                          [transaction requestID],
-                         [NSNumber numberWithLong: [self sessionId]],
+                         sessionId,
                          [NSNumber numberWithDouble: [[transaction startTime] timeIntervalSince1970]],
                          [NSNumber numberWithDouble: [transaction duration]],
                          [NSNumber numberWithDouble: [transaction latency]],
@@ -142,9 +121,9 @@
                          [NSNumber numberWithDouble: [self getHTTPResponseBodySizeForTransaction:transaction withResponseData:responseBody]],
                          [self getHTTPResponseContentForTransaction:transaction responseBody:responseBody]];
         
-//        BOOL inserted = [db executeUpdate:@"INSERT INTO traces (id, appSessionId) VALUES (?, ?)",
-//                         [transaction requestID],
-//                         [NSNumber numberWithLong: [self sessionId]]];
+        //        BOOL inserted = [db executeUpdate:@"INSERT INTO traces (id, appSessionId) VALUES (?, ?)",
+        //                         [transaction requestID],
+        //                         [NSNumber numberWithLong: [self sessionId]]];
         if(!inserted)
             NSLog(@"error = %@", [db lastErrorMessage]);
         
@@ -153,11 +132,40 @@
     
 }
 
+
+
+//"queryString": [
+//                {
+//                    "name": "param1",
+//                    "value": "value1",
+//                    "comment": ""
+//                }
+//                ]
 -(NSString*) getURLQueryOnTransaction:(OSNetworkTransaction*) transaction {
-    if([[transaction.request URL] query]){
-        return [[transaction.request URL] query];
-    }else {
-        return @"";
+    
+    
+    NSURL* url = [transaction.request URL];
+    
+    if(url) {
+        NSMutableArray* queryString = [[NSMutableArray alloc] init];
+        
+        NSURLComponents* components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+        NSArray *queryItems = [components queryItems];
+        
+        for (NSURLQueryItem *queryItem in queryItems) {
+            NSDictionary * item = @{@"name": [queryItem name], @"value": [queryItem value] ? [queryItem value] : @""};
+            [queryString addObject:item];
+        }
+        
+        NSError *error;
+        NSData *jsonData = [NSJSONSerialization dataWithJSONObject:queryString options:0 error: &error];
+        if(error) {
+            return @"[]";
+        } else {
+            return [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+        }
+    } else {
+        return @"[]";
     }
 }
 
@@ -414,8 +422,13 @@
         }
         
         
-        return [responseContent description];
-        
+        NSError *error;
+        NSData *jsonData = [NSJSONSerialization dataWithJSONObject:responseContent options:0 error: &error];
+        if(error) {
+            return @"{}";
+        } else {
+            return [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+        }
     }
     return @"";
 }

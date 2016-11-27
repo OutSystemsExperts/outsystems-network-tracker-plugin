@@ -8,9 +8,8 @@
 
 #import <Foundation/Foundation.h>
 #import "OSNetworkRecorder.h"
+#import "FMDB.h"
 
 @interface OSNetworkTransactionDatabaseWriter : NSObject <OSNetworkRecorderOutputWriter>
-
--(void) newSession;
 
 @end

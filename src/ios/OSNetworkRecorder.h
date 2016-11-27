@@ -20,7 +20,7 @@
 
 @protocol OSNetworkRecorderOutputWriter <NSObject>
 
-- (void) writeNetworkTransaction: (OSNetworkTransaction* ) transaction responseBody:(NSData*) responseBody;
+- (void) writeNetworkTransaction: (OSNetworkTransaction* ) transaction responseBody:(NSData*) responseBody sessionId:(NSNumber*) sessionId;
 
 @end
 
@@ -29,6 +29,13 @@
 +(instancetype) sharedInstance;
 
 -(void) registerWriter:(id <OSNetworkRecorderOutputWriter>) writer;
+
+
+-(void) newSession;
+
+-(NSNumber*) currentSession;
+
+- (NSString*) filename;
 
 // Recording network activity
 

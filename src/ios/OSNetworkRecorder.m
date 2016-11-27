@@ -15,8 +15,10 @@
 //
 
 #import "OSNetworkRecorder.h"
-
-
+#import <objc/runtime.h>
+#import "RSSwizzle.h"
+#import "AppDelegate.h"
+#import "OSNetworkHARExporter.h"
 
 @interface OSNetworkRecorder ()
 
@@ -26,6 +28,11 @@
 @property (nonatomic, strong) dispatch_queue_t queue;
 @property (nonatomic, strong) id<OSNetworkRecorderOutputWriter> outputWriter;
 
+/*
+ *   Identifies a running session.
+ *   A running session is the time of execution since the application goes into foreground and ends when entering on background.
+ */
+@property time_t sessionId;
 @end
 
 @implementation OSNetworkRecorder
@@ -36,7 +43,7 @@
     if (self) {
         self.orderedTransactions = [NSMutableArray array];
         self.networkTransactionsForRequestIdentifiers = [NSMutableDictionary dictionary];
-        
+        [self swizzleAppDelegate];
         // Serial queue used because we use mutable objects that are not thread safe
         self.queue = dispatch_queue_create("com.outsystems.OSNetworkRecorder", DISPATCH_QUEUE_SERIAL);
     }
@@ -51,6 +58,21 @@
     });
     return sharedInstace;
 }
+
+-(void) newSession{
+    self.sessionId = [[NSDate date] timeIntervalSince1970];
+}
+
+-(NSNumber*) currentSession {
+    return [NSNumber numberWithLong: self.sessionId];
+}
+
+- (NSString*) filename {
+    NSString *documentsPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    NSString *filePath = [documentsPath stringByAppendingPathComponent:@"os_network_trace.db"];
+    return filePath;
+}
+
 
 -(void) registerWriter:(id <OSNetworkRecorderOutputWriter>) writer {
     self.outputWriter = writer;
@@ -121,7 +143,7 @@
         transaction.duration = -[transaction.startTime timeIntervalSinceDate:finishedDate];
         
         if(self.outputWriter) {
-            [self.outputWriter writeNetworkTransaction:transaction responseBody:responseBody];
+            [self.outputWriter writeNetworkTransaction:transaction responseBody:responseBody sessionId:[self currentSession]];
         }
         
     });
@@ -141,6 +163,47 @@
 /// This string can be set to anything useful about the API used to make the request.
 - (void)recordMechanism:(NSString *)mechanism forRequestID:(NSString *)requestID {
     
+}
+
+
+-(void)swizzleAppDelegate {
+    SEL selector = @selector(applicationDidEnterBackground:);
+    Class cls = [AppDelegate class];
+    
+    typedef void (^UIApplicationBlockApplicationDidEnterBckg)(id <UIApplicationDelegate> slf, UIApplication *application);
+    UIApplicationBlockApplicationDidEnterBckg swizzleddBlock = ^(id <UIApplicationDelegate> slf, UIApplication *application) {
+        NSLog(@"AppDelegate went to background");
+        
+        __block UIBackgroundTaskIdentifier task = [application beginBackgroundTaskWithExpirationHandler:^{
+            if(task != UIBackgroundTaskInvalid) {
+                [application endBackgroundTask:task];
+                task = UIBackgroundTaskInvalid;
+            }
+            
+        }];
+        
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+
+            [[OSNetworkHARExporter sharedInstance] exportHARForSession: [self currentSession] dbFilePath: [[OSNetworkRecorder sharedInstance] filename] ];
+            
+            if(task != UIBackgroundTaskInvalid) {
+                [application endBackgroundTask:task];
+                task = UIBackgroundTaskInvalid;
+            }
+        });
+    };
+    
+    [RSSwizzle swizzleInstanceMethod:selector inClass:cls newImpFactory:^id(RSSwizzleInfo *swizzleInfo) {
+        return ^void(__unsafe_unretained id self, UIApplication* application){
+            
+            swizzleddBlock(self, application);
+            
+            void (*originalIMP)(__unsafe_unretained id, SEL, UIApplication*);
+            originalIMP = (__typeof(originalIMP))[swizzleInfo getOriginalImplementation];
+            originalIMP(self, selector, application);
+        };
+        
+    } mode:RSSwizzleModeAlways key:nil];
 }
 
 @end
