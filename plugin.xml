@@ -13,8 +13,8 @@
         <framework src="libsqlite3.dylib" />
         
         <!-- https://github.com/rabovik/RSSwizzle.git -->
-        <header-file src="RSSwizzle/RSSwizzle/RSSwizzle.h" />
-        <source-file src="RSSwizzle/RSSwizzle/RSSwizzle.m" />
+        <header-file src="src/ios/RSSwizzle/RSSwizzle.h" />
+        <source-file src="src/ios/RSSwizzle/RSSwizzle.m" />
 
         <header-file src="src/ios/OSNetworkTrackerPlugin.h" />
         <source-file src="src/ios/OSNetworkTrackerPlugin.m" />
